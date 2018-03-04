@@ -288,7 +288,6 @@ static int ssp_probe(struct i2c_client *client,
 #endif
 
 	enable_irq(data->iIrq);
-	enable_irq_wake(data->iIrq);
 	pr_info("[SSP]: %s - probe success!\n", __func__);
 
 	enable_debug_timer(data);
@@ -331,7 +330,6 @@ static void ssp_shutdown(struct i2c_client *client)
 
 	disable_debug_timer(data);
 
-	disable_irq_wake(data->iIrq);
 	disable_irq(data->iIrq);
 	free_irq(data->iIrq, data);
 	gpio_free(data->client->irq);
