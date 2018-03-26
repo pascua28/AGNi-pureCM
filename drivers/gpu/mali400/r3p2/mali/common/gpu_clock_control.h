@@ -1,5 +1,5 @@
 /*
- * gpu_control.h -- a control interface for the sgs3 and note2
+ * gpu_clock_control.h -- a clock control interface for the sgs2
  *
  *  Copyright (C) 2011 Michael Wodkins
  *  twitter - @xdanetarchy
@@ -10,9 +10,5 @@
  *  Free Software Foundation;
  *
  */
-#include "../platform/pegasus-m400/exynos4_pmm.h"
 
-void gpu_control_start(void);
-
-mali_bool mali_dvfs_table_update(void);
-extern int gpu_voltage_default[MALI_DVFS_STEPS];
+void gpu_clock_control_start(void);
