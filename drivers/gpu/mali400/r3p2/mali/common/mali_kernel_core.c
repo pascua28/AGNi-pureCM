@@ -39,7 +39,8 @@
 #endif
 
 #ifdef CONFIG_GPU_CLOCK_CONTROL
-#include <gpu_control.h>
+#include <gpu_clock_control.h>
+#include <gpu_voltage_control.h>
 #endif
 
 /* Mali GPU memory. Real values come from module parameter or from device specific data */
@@ -947,7 +948,8 @@ _mali_osk_errcode_t mali_initialize_subsystems(void)
 	if (_MALI_OSK_ERR_OK != err) goto utilization_init_failed;
 
 #ifdef CONFIG_GPU_CLOCK_CONTROL
-  	gpu_control_start();
+  	gpu_clock_control_start();
+  	gpu_voltage_control_start();
 #endif
 
 	/* Allowing the system to be turned off */
@@ -1061,32 +1063,20 @@ _mali_osk_errcode_t _mali_ukk_get_api_version( _mali_uk_get_api_version_s *args 
 	MALI_DEBUG_ASSERT_POINTER(args);
 	MALI_CHECK_NON_NULL(args->ctx, _MALI_OSK_ERR_INVALID_ARGS);
 
-#ifndef CONFIG_MALI_R3P2_REL_3_API_SKIP_COMPATIBILITY_CHECKING
 	/* check compatability */
 	if ( args->version == _MALI_UK_API_VERSION )
 	{
-#endif
 		args->compatible = 1;
-#ifndef CONFIG_MALI_R3P2_REL_3_API_SKIP_COMPATIBILITY_CHECKING
 	}
 	else
 	{
 		args->compatible = 0;
 	}
-#endif
 
 	args->version = _MALI_UK_API_VERSION; /* report our version */
 
 	/* success regardless of being compatible or not */
 	MALI_SUCCESS;
-}
-
-void _mali_ukk_compositor_priority(void * session_ptr)
-{
-	struct mali_session_data *session = session_ptr;
-	session->is_compositor = MALI_TRUE;
-	mali_pp_scheduler_blocked_on_compositor = MALI_FALSE;
-	MALI_DEBUG_PRINT(2, ("Setting session: %d as Compositor\n", _mali_osk_get_pid()));
 }
 
 _mali_osk_errcode_t _mali_ukk_wait_for_notification( _mali_uk_wait_for_notification_s *args )
@@ -1219,8 +1209,6 @@ _mali_osk_errcode_t _mali_ukk_open(void **context)
 	}
 #endif
 
-	session->is_compositor = MALI_FALSE;
-
 	*context = (void*)session;
 
 	/* Add session to the list of all sessions. */
@@ -1279,12 +1267,6 @@ _mali_osk_errcode_t _mali_ukk_close(void **context)
 	/* Abort queued and running jobs */
 	mali_gp_scheduler_abort_session(session);
 	mali_pp_scheduler_abort_session(session);
-
-	if (session->is_compositor)
-	{
-		mali_pp_scheduler_blocked_on_compositor = MALI_FALSE;
-		mali_pp_scheduler_schedule();
-	}
 
 	/* Flush pending work.
 	 * Needed to make sure all bottom half processing related to this
