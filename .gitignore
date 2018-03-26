@@ -80,3 +80,8 @@ GTAGS
 *.orig
 *~
 \#*#
+scripts/basic/fixdep
+scripts/kconfig/conf
+scripts/kconfig/lex.zconf.c
+scripts/kconfig/zconf.hash.c
+scripts/kconfig/zconf.tab.c
