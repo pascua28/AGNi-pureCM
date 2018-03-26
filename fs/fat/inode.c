@@ -224,9 +224,9 @@ static sector_t _fat_bmap(struct address_space *mapping, sector_t block)
 	sector_t blocknr;
 
 	/* fat_get_cluster() assumes the requested blocknr isn't truncated. */
-	down_read(&mapping->host->i_alloc_sem);
+	down_read(&MSDOS_I(mapping->host)->truncate_lock);
 	blocknr = generic_block_bmap(mapping, block, fat_get_block);
-	up_read(&mapping->host->i_alloc_sem);
+	up_read(&MSDOS_I(mapping->host)->truncate_lock);
 
 	return blocknr;
 }
@@ -242,7 +242,6 @@ static const struct address_space_operations fat_aops = {
 	.bmap		= _fat_bmap
 };
 
-#if defined(CONFIG_VMWARE_MVP)
 int _fat_fallocate(struct inode *inode, loff_t len)
 {
 	struct super_block *sb = inode->i_sb;
@@ -307,7 +306,6 @@ int _fat_fallocate(struct inode *inode, loff_t len)
 
 	return err;
 }
-#endif
 
 /*
  * New FAT inode stuff. We do the following:
@@ -554,8 +552,6 @@ static void fat_put_super(struct super_block *sb)
 {
 	struct msdos_sb_info *sbi = MSDOS_SB(sb);
 
-	fat_msg(sb, KERN_INFO, "trying to unmount...");
-
 	if (sb->s_dirt)
 		fat_write_super(sb);
 
@@ -569,8 +565,6 @@ static void fat_put_super(struct super_block *sb)
 
 	sb->s_fs_info = NULL;
 	kfree(sbi);
-
-	fat_msg(sb, KERN_INFO, "unmounted successfully!");
 }
 
 static struct kmem_cache *fat_inode_cachep;
@@ -581,6 +575,8 @@ static struct inode *fat_alloc_inode(struct super_block *sb)
 	ei = kmem_cache_alloc(fat_inode_cachep, GFP_NOFS);
 	if (!ei)
 		return NULL;
+
+	init_rwsem(&ei->truncate_lock);
 	return &ei->vfs_inode;
 }
 
@@ -1338,7 +1334,6 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 	long error;
 	char buf[50];
 
-	fat_msg(sb, KERN_INFO, "trying to mount...");
 	/*
 	 * GFP_KERNEL is ok here, because while we do hold the
 	 * supeblock lock, memory pressure can't call back into
@@ -1346,10 +1341,8 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 	 * it and have no inodes etc active!
 	 */
 	sbi = kzalloc(sizeof(struct msdos_sb_info), GFP_KERNEL);
-	if (!sbi) {
-		fat_msg(sb, KERN_ERR, "failed to mount! (ENOMEM)");
+	if (!sbi)
 		return -ENOMEM;
-	}
 	sb->s_fs_info = sbi;
 
 	sb->s_flags |= MS_NODIRATIME;
@@ -1602,7 +1595,6 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 		goto out_fail;
 	}
 
-	fat_msg(sb, KERN_INFO, "mounted successfully!");
 	return 0;
 
 out_invalid:
@@ -1611,7 +1603,6 @@ out_invalid:
 		fat_msg(sb, KERN_INFO, "Can't find a valid FAT filesystem");
 
 out_fail:
-	fat_msg(sb, KERN_ERR, "failed to mount!");
 	if (fat_inode)
 		iput(fat_inode);
 	if (root_inode)
