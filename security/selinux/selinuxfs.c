@@ -138,7 +138,6 @@ static ssize_t sel_read_enforce(struct file *filp, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, tmpbuf, length);
 }
 
-#ifndef CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
 static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 				 size_t count, loff_t *ppos)
@@ -169,20 +168,6 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 	length = -EINVAL;
 	if (sscanf(page, "%d", &new_value) != 1)
 		goto out;
-#if (defined(CONFIG_ALWAYS_ENFORCE) && !defined(CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE))
-	// If build is user build and enforce option is set, selinux is always enforcing
-	new_value = 1;
-	length = task_has_security(current, SECURITY__SETENFORCE);
-	audit_log(current->audit_context, GFP_KERNEL, AUDIT_MAC_STATUS,
-                        "config_always_enforce - true; enforcing=%d old_enforcing=%d auid=%u ses=%u",
-                        new_value, selinux_enforcing,
-                        audit_get_loginuid(current),
-                        audit_get_sessionid(current));
-	selinux_enforcing = new_value;
-	avc_ss_reset(0);
-	selnl_notify_setenforce(new_value);
-        selinux_status_update_setenforce(new_value);
-#else
 	if (new_value != selinux_enforcing) {
 		length = task_has_security(current, SECURITY__SETENFORCE);
 		if (length)
@@ -198,7 +183,6 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 		selnl_notify_setenforce(selinux_enforcing);
 		selinux_status_update_setenforce(selinux_enforcing);
 	}
-#endif
 	length = count;
 out:
 	free_page((unsigned long) page);
@@ -207,15 +191,10 @@ out:
 #else
 #define sel_write_enforce NULL
 #endif
-#endif
 
 static const struct file_operations sel_enforce_ops = {
 	.read		= sel_read_enforce,
-#ifdef CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE
-	.write		= NULL,
-#else
 	.write		= sel_write_enforce,
-#endif
 	.llseek		= generic_file_llseek,
 };
 
@@ -1976,9 +1955,6 @@ static int __init init_sel_fs(void)
 {
 	int err;
 
-#if (defined(CONFIG_ALWAYS_ENFORCE) && !defined(CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE))
-	selinux_enabled = 1;
-#endif
 	if (!selinux_enabled)
 		return 0;
 

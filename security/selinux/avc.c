@@ -818,9 +818,6 @@ inline int avc_audit(u32 ssid, u32 tsid,
 {
 	u32 denied, audited;
 	denied = requested & ~avd->allowed;
-#ifdef CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE
-		audited = requested & avd->auditallow;
-#else
 	if (unlikely(denied)) {
 		audited = denied & avd->auditdeny;
 		/*
@@ -847,7 +844,6 @@ inline int avc_audit(u32 ssid, u32 tsid,
 		audited = denied = requested;
 	else
 		audited = requested & avd->auditallow;
-#endif
 	if (likely(!audited))
 		return 0;
 
@@ -1219,11 +1215,7 @@ inline int avc_has_perm_noaudit(u32 ssid, u32 tsid,
 
 	denied = requested & ~(avd->allowed);
 	if (unlikely(denied))
-#if defined(CONFIG_SECURITY_SELINUX_FORCE_PERMISSIVE)
-		rc = avc_denied(ssid, tsid, tclass, avd->allowed, 0, flags, avd);
-#else
 		rc = avc_denied(ssid, tsid, tclass, requested, 0, flags, avd);
-#endif
 	rcu_read_unlock();
 	return rc;
 }
