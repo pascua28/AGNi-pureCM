@@ -414,7 +414,7 @@ static ssize_t vsync_event_show(struct device *dev,
 			ktime_to_ns(fbdev[0]->vsync_info.timestamp) : 0));
 }
 
-static DEVICE_ATTR(vsync_time, S_IRUGO, vsync_event_show, NULL);
+static DEVICE_ATTR(vsync_event, 0444, vsync_event_show, NULL);
 
 #ifdef CONFIG_FB_S5P_VSYNC_SYSFS
 static ssize_t vsync_time_show(struct device *dev,
