@@ -37,6 +37,108 @@
 #define EARLYSUSPEND_HOTPLUGLOCK 1
 
 /*
+ * runqueue average
+ */
+
+#define RQ_AVG_TIMER_RATE	10
+
+struct runqueue_data {
+	unsigned int nr_run_avg;
+	unsigned int update_rate;
+	int64_t last_time;
+	int64_t total_time;
+	struct delayed_work work;
+	struct workqueue_struct *nr_run_wq;
+	spinlock_t lock;
+};
+
+static struct runqueue_data *rq_data;
+static void rq_work_fn(struct work_struct *work);
+
+static void start_rq_work(void)
+{
+	rq_data->nr_run_avg = 0;
+	rq_data->last_time = 0;
+	rq_data->total_time = 0;
+	if (rq_data->nr_run_wq == NULL)
+		rq_data->nr_run_wq =
+			create_singlethread_workqueue("nr_run_avg");
+
+	queue_delayed_work(rq_data->nr_run_wq, &rq_data->work,
+			   msecs_to_jiffies(rq_data->update_rate));
+	return;
+}
+
+static void stop_rq_work(void)
+{
+	if (rq_data->nr_run_wq)
+		cancel_delayed_work(&rq_data->work);
+	return;
+}
+
+static int __init init_rq_avg(void)
+{
+	rq_data = kzalloc(sizeof(struct runqueue_data), GFP_KERNEL);
+	if (rq_data == NULL) {
+		pr_err("%s cannot allocate memory\n", __func__);
+		return -ENOMEM;
+	}
+	spin_lock_init(&rq_data->lock);
+	rq_data->update_rate = RQ_AVG_TIMER_RATE;
+	INIT_DELAYED_WORK_DEFERRABLE(&rq_data->work, rq_work_fn);
+
+	return 0;
+}
+
+static void rq_work_fn(struct work_struct *work)
+{
+	int64_t time_diff = 0;
+	int64_t nr_run = 0;
+	unsigned long flags = 0;
+	int64_t cur_time = ktime_to_ns(ktime_get());
+
+	spin_lock_irqsave(&rq_data->lock, flags);
+
+	if (rq_data->last_time == 0)
+		rq_data->last_time = cur_time;
+	if (rq_data->nr_run_avg == 0)
+		rq_data->total_time = 0;
+
+	nr_run = nr_running() * 100;
+	time_diff = cur_time - rq_data->last_time;
+	do_div(time_diff, 1000 * 1000);
+
+	if (time_diff != 0 && rq_data->total_time != 0) {
+		nr_run = (nr_run * time_diff) +
+			(rq_data->nr_run_avg * rq_data->total_time);
+		do_div(nr_run, rq_data->total_time + time_diff);
+	}
+	rq_data->nr_run_avg = nr_run;
+	rq_data->total_time += time_diff;
+	rq_data->last_time = cur_time;
+
+	if (rq_data->update_rate != 0)
+		queue_delayed_work(rq_data->nr_run_wq, &rq_data->work,
+				   msecs_to_jiffies(rq_data->update_rate));
+
+	spin_unlock_irqrestore(&rq_data->lock, flags);
+}
+
+static unsigned int get_nr_run_avg(void)
+{
+	unsigned int nr_run_avg;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&rq_data->lock, flags);
+	nr_run_avg = rq_data->nr_run_avg;
+	rq_data->nr_run_avg = 0;
+	spin_unlock_irqrestore(&rq_data->lock, flags);
+
+	return nr_run_avg;
+}
+
+
+/*
  * dbs is used in this file as a shortform for demandbased switching
  * It helps to keep variable names smaller, simpler
  */
@@ -62,8 +164,7 @@
 #define DEF_FREQ_STEP				(37)
 #define DEF_START_DELAY				(0)
 
-#define UP_THRESHOLD_AT_MIN_FREQ		(40)
-#define FREQ_FOR_RESPONSIVENESS			(500000)
+#define DEF_UP_THRESHOLD_AT_MIN_FREQ		(40)
 
 #define HOTPLUG_DOWN_INDEX			(0)
 #define HOTPLUG_UP_INDEX			(1)
@@ -162,6 +263,7 @@ static DEFINE_MUTEX(dbs_mutex);
 static struct dbs_tuners {
 	unsigned int sampling_rate;
 	unsigned int up_threshold;
+	unsigned int up_threshold_at_min_freq;
 	unsigned int down_differential;
 	unsigned int ignore_nice;
 	unsigned int sampling_down_factor;
@@ -188,10 +290,10 @@ static struct dbs_tuners {
 #endif
 } dbs_tuners_ins = {
 	.up_threshold = DEF_FREQUENCY_UP_THRESHOLD,
+	.up_threshold_at_min_freq = DEF_UP_THRESHOLD_AT_MIN_FREQ,
 	.sampling_down_factor = DEF_SAMPLING_DOWN_FACTOR,
 	.down_differential = DEF_FREQUENCY_DOWN_DIFFERENTIAL,
 	.ignore_nice = 0,
-	.io_is_busy = 1,
 	.freq_step = DEF_FREQ_STEP,
 	.cpu_up_rate = DEF_CPU_UP_RATE,
 	.cpu_down_rate = DEF_CPU_DOWN_RATE,
@@ -395,6 +497,7 @@ static ssize_t show_##file_name						\
 show_one(sampling_rate, sampling_rate);
 show_one(io_is_busy, io_is_busy);
 show_one(up_threshold, up_threshold);
+show_one(up_threshold_at_min_freq, up_threshold_at_min_freq);
 show_one(sampling_down_factor, sampling_down_factor);
 show_one(ignore_nice_load, ignore_nice);
 show_one(down_differential, down_differential);
@@ -429,7 +532,6 @@ static ssize_t show_cpucore_table(struct kobject *kobj,
 {
 	ssize_t count = 0;
 	int i;
-
 	for (i = CONFIG_NR_CPUS; i > 0; i--) {
 		count += sprintf(&buf[count], "%d ", i);
 	}
@@ -540,6 +642,19 @@ static ssize_t store_up_threshold(struct kobject *a, struct attribute *b,
 		return -EINVAL;
 	}
 	dbs_tuners_ins.up_threshold = input;
+	return count;
+}
+
+static ssize_t store_up_threshold_at_min_freq(struct kobject *a, struct attribute *b,
+				  const char *buf, size_t count)
+{
+	unsigned int input;
+	int ret;
+	ret = sscanf(buf, "%u", &input);
+	if (ret != 1)
+		return -EINVAL;
+
+	dbs_tuners_ins.up_threshold_at_min_freq = input;
 	return count;
 }
 
@@ -819,6 +934,7 @@ static ssize_t store_boost_lock_time(struct kobject *a, struct attribute *b,
 define_one_global_rw(sampling_rate);
 define_one_global_rw(io_is_busy);
 define_one_global_rw(up_threshold);
+define_one_global_rw(up_threshold_at_min_freq);
 define_one_global_rw(sampling_down_factor);
 define_one_global_rw(ignore_nice_load);
 define_one_global_rw(down_differential);
@@ -843,6 +959,7 @@ static struct attribute *dbs_attributes[] = {
 	&sampling_rate_min.attr,
 	&sampling_rate.attr,
 	&up_threshold.attr,
+	&up_threshold_at_min_freq.attr,
 	&sampling_down_factor.attr,
 	&ignore_nice_load.attr,
 	&io_is_busy.attr,
@@ -969,8 +1086,8 @@ static void debug_hotplug_check(int which, int rq_avg, int freq,
 			 struct cpu_usage *usage)
 {
 	int cpu;
-	printk(KERN_ERR "CHECK %s rq %d freq %d [", which ? "up" : "down",
-	       (rq_avg * 100) >> FSHIFT, freq);
+	printk(KERN_ERR "CHECK %s rq %d.%02d freq %d [", which ? "up" : "down",
+	       rq_avg / 100, rq_avg % 100, freq);
 	for_each_online_cpu(cpu) {
 		printk(KERN_ERR "(%d, %d), ", cpu, usage->load[cpu]);
 	}
@@ -1029,8 +1146,6 @@ static int check_up(void)
 		if (dbs_tuners_ins.dvfs_debug)
 			debug_hotplug_check(1, rq_avg, freq, usage);
 	}
-
-	min_rq_avg = (min_rq_avg * 100) >> FSHIFT;
 
 	if (min_freq >= up_freq && min_rq_avg > up_rq) {
 		printk(KERN_ERR "[HOTPLUG IN] %s %d>=%d && %d>%d\n",
@@ -1096,8 +1211,6 @@ static int check_down(void)
 			debug_hotplug_check(0, rq_avg, freq, usage);
 	}
 
-	max_rq_avg = (max_rq_avg * 100) >> FSHIFT;
-
 	if (max_freq <= down_freq && max_rq_avg <= down_rq) {
 		printk(KERN_ERR "[HOTPLUG OUT] %s %d<=%d && %d<%d\n",
 			__func__, max_freq, down_freq, max_rq_avg, down_rq);
@@ -1108,30 +1221,34 @@ static int check_down(void)
 	return 0;
 }
 
-extern unsigned long avg_nr_running(void);
-
 static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 {
+	unsigned int max_load_freq;
+
 	struct cpufreq_policy *policy;
 	unsigned int j;
-	unsigned int max_load = 0;
 	int num_hist = hotplug_history->num_hist;
 	int max_hotplug_rate = max(dbs_tuners_ins.cpu_up_rate,
 				   dbs_tuners_ins.cpu_down_rate);
 	int up_threshold = dbs_tuners_ins.up_threshold;
+	int up_threshold_at_min_freq = dbs_tuners_ins.up_threshold_at_min_freq;
 
 	policy = this_dbs_info->cur_policy;
 
 	hotplug_history->usage[num_hist].freq = policy->cur;
-	hotplug_history->usage[num_hist].rq_avg = avg_nr_running();
+	hotplug_history->usage[num_hist].rq_avg = get_nr_run_avg();
 	++hotplug_history->num_hist;
+
+	/* Get Absolute Load - in terms of freq */
+	max_load_freq = 0;
 
 	for_each_cpu(j, policy->cpus) {
 		struct cpu_dbs_info_s *j_dbs_info;
 		cputime64_t cur_wall_time, cur_idle_time, cur_iowait_time;
 		cputime64_t prev_wall_time, prev_idle_time, prev_iowait_time;
 		unsigned int idle_time, wall_time, iowait_time;
-		unsigned int load_cpu;
+		unsigned int load, load_freq;
+		int freq_avg;
 
 		j_dbs_info = &per_cpu(od_cpu_dbs_info, j);
 		prev_wall_time = j_dbs_info->prev_cpu_wall;
@@ -1176,11 +1293,16 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 		if (unlikely(!wall_time || wall_time < idle_time))
 			continue;
 
-		load_cpu = 100 * (wall_time - idle_time) / wall_time;
-		hotplug_history->usage[num_hist].load[j] = load_cpu;
+		load = 100 * (wall_time - idle_time) / wall_time;
+		hotplug_history->usage[num_hist].load[j] = load;
 
-		if (load_cpu > max_load)
-			max_load = load_cpu;
+		freq_avg = __cpufreq_driver_getavg(policy, j);
+		if (freq_avg <= 0)
+			freq_avg = policy->cur;
+
+		load_freq = load * freq_avg;
+		if (load_freq > max_load_freq)
+			max_load_freq = load_freq;
 	}
 
 	/* Check for CPU hotplug */
@@ -1193,11 +1315,6 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 	}
 	if (hotplug_history->num_hist  == max_hotplug_rate)
 		hotplug_history->num_hist = 0;
-
-	/* Check for frequency increase */
-	if (policy->cur < FREQ_FOR_RESPONSIVENESS) {
-		up_threshold = UP_THRESHOLD_AT_MIN_FREQ;
-	}
 
 #ifdef CONFIG_CPU_FREQ_GOV_PEGASUSQ_BOOST
 	if (is_boosting && policy->cur < dbs_tuners_ins.boost_freq) {
@@ -1213,7 +1330,7 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 	}
 #endif
 
-	if (max_load > dbs_tuners_ins.up_threshold) {
+	if (max_load_freq > up_threshold * policy->cur) {
 		int inc = (policy->max * dbs_tuners_ins.freq_step) / 100;
 		int target = min(policy->max, policy->cur + inc);
 		/* If switching to max speed, apply sampling_down_factor */
@@ -1243,12 +1360,15 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 	 * policy. To be safe, we focus DOWN_DIFFERENTIAL points under
 	 * the threshold.
 	 */
-	if (max_load <
-	    dbs_tuners_ins.up_threshold - dbs_tuners_ins.down_differential) {
+	if (max_load_freq <
+	    (dbs_tuners_ins.up_threshold - dbs_tuners_ins.down_differential) *
+	    policy->cur) {
 		unsigned int freq_next;
 		unsigned int down_thres;
 
-		freq_next = max_load * policy->max / 100;
+		freq_next = max_load_freq /
+			(dbs_tuners_ins.up_threshold -
+			 dbs_tuners_ins.down_differential);
 
 		/* No longer fully busy, reset rate_mult */
 		this_dbs_info->rate_mult = 1;
@@ -1257,12 +1377,8 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 			freq_next = policy->min;
 
 
-		down_thres = UP_THRESHOLD_AT_MIN_FREQ
+		down_thres = up_threshold_at_min_freq
 			- dbs_tuners_ins.down_differential;
-
-		if (freq_next < FREQ_FOR_RESPONSIVENESS
-			&& (max_load / freq_next) > down_thres)
-			freq_next = FREQ_FOR_RESPONSIVENESS;
 
 #ifdef CONFIG_CPU_FREQ_GOV_PEGASUSQ_BOOST
 		if (is_boosting)
@@ -1380,6 +1496,7 @@ static void cpufreq_pegasusq_early_suspend(struct early_suspend *h)
 	atomic_set(&g_hotplug_lock,
 	    (dbs_tuners_ins.min_cpu_lock) ? dbs_tuners_ins.min_cpu_lock : 1);
 	apply_hotplug_lock();
+	stop_rq_work();
 #endif
 }
 static void cpufreq_pegasusq_late_resume(struct early_suspend *h)
@@ -1392,6 +1509,7 @@ static void cpufreq_pegasusq_late_resume(struct early_suspend *h)
 	dbs_tuners_ins.sampling_rate = prev_sampling_rate;
 #if EARLYSUSPEND_HOTPLUGLOCK
 	apply_hotplug_lock();
+	start_rq_work();
 #endif
 }
 #endif
@@ -1414,6 +1532,7 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		dbs_tuners_ins.max_freq = policy->max;
 		dbs_tuners_ins.min_freq = policy->min;
 		hotplug_history->num_hist = 0;
+		start_rq_work();
 
 		mutex_lock(&dbs_mutex);
 
@@ -1481,6 +1600,8 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		dbs_enable--;
 		mutex_unlock(&dbs_mutex);
 
+		stop_rq_work();
+
 		if (!dbs_enable)
 			sysfs_remove_group(cpufreq_global_kobject,
 					   &dbs_attr_group);
@@ -1508,6 +1629,10 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 static int __init cpufreq_gov_dbs_init(void)
 {
 	int ret;
+
+	ret = init_rq_avg();
+	if (ret)
+		return ret;
 
 	hotplug_history = kzalloc(sizeof(struct cpu_usage_history), GFP_KERNEL);
 	if (!hotplug_history) {
@@ -1540,6 +1665,7 @@ err_reg:
 err_queue:
 	kfree(hotplug_history);
 err_hist:
+	kfree(rq_data);
 	return ret;
 }
 
@@ -1548,6 +1674,7 @@ static void __exit cpufreq_gov_dbs_exit(void)
 	cpufreq_unregister_governor(&cpufreq_gov_pegasusq);
 	destroy_workqueue(dvfs_workqueue);
 	kfree(hotplug_history);
+	kfree(rq_data);
 }
 
 MODULE_AUTHOR("ByungChang Cha <bc.cha@samsung.com>");
