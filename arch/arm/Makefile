@@ -258,11 +258,8 @@ core-y				+= arch/arm/kernel/ arch/arm/mm/ arch/arm/common/
 core-y				+= arch/arm/crypto/
 core-y				+= $(machdirs) $(platdirs)
 
-ifeq ($(CONFIG_INTELLI_PLUG),y)
-core-$(CONFIG_INTELLI_PLUG)	+= arch/arm/hotplug/
-endif
-ifeq ($(CONFIG_MSM_HOTPLUG),y)
-core-$(CONFIG_MSM_HOTPLUG)	+= arch/arm/hotplug/
+ifeq ($(call ifdef_any_of, CONFIG_INTELLI_PLUG CONFIG_MSM_HOTPLUG),)
+core-y	+= arch/arm/hotplug/
 endif
 
 drivers-$(CONFIG_OPROFILE)      += arch/arm/oprofile/
