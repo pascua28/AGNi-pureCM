@@ -31,6 +31,8 @@
 #include <linux/touch_wake.h>
 #endif
 
+#include <linux/earlysuspend.h>
+
 extern struct class *sec_class;
 
 struct gpio_button_data {
@@ -64,6 +66,8 @@ struct gpio_keys_drvdata {
 int flip_cover_open;
 extern ts_powered_on;
 #endif
+
+static bool suspended = false;
 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
@@ -584,6 +588,23 @@ static void gpio_keys_report_event(struct gpio_button_data *bdata)
 	}
 }
 
+static void gpio_keys_early_suspend(struct early_suspend *handler)
+{
+    suspended = true;
+    return;
+}
+
+static void gpio_keys_late_resume(struct early_suspend *handler)
+{
+    suspended = false;
+    return;
+}
+
+static struct early_suspend gpio_suspend = {
+    .suspend = gpio_keys_early_suspend,
+    .resume = gpio_keys_late_resume,
+};
+
 static void gpio_keys_work_func(struct work_struct *work)
 {
 	struct gpio_button_data *bdata =
@@ -1006,6 +1027,7 @@ static struct platform_driver gpio_keys_device_driver = {
 
 static int __init gpio_keys_init(void)
 {
+    register_early_suspend(&gpio_suspend);
 	return platform_driver_register(&gpio_keys_device_driver);
 }
 
