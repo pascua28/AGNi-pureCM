@@ -723,7 +723,7 @@ extern unsigned int intelli_plug_active;
 #endif
 
 #if defined (CONFIG_MSM_HOTPLUG)
-extern unsigned int msm_enabled;
+extern bool msm_enabled;
 #endif
 
 static int exynos_cpufreq_policy_notifier_call(struct notifier_block *this,
