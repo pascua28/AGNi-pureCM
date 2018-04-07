@@ -43,3 +43,4 @@ mv ../$DEVICE/$DEVICE/anykernel.sh ../$DEVICE/
 find -name '*.ko' -exec cp -av {} ../$DEVICE/modules/ \;
 ${CROSS_COMPILE}strip --strip-unneeded ../$DEVICE/modules/*
 cp arch/arm/boot/zImage ../$DEVICE/
+rm ../$DEVICE/modules/placeholder
