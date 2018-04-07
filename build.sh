@@ -24,7 +24,7 @@ esac
 
   TIMESTAMP2=$(date +%s)
 
-  echo "compile time:" $(($TIMESTAMP2 - $TIMESTAMP1)) "seconds"
+  echo "compile time:" $(($TIMESTAMP2 - $TIMESTAMP)) "seconds"
 
 if [ -e ../$DEVICE ]; then
 	rm -rf ../$DEVICE
