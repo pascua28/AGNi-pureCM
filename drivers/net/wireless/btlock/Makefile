@@ -1,1 +1,1 @@
-obj-m	+= btlock.o
+obj-y	+= btlock.o
