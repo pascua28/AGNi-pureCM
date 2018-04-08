@@ -13,9 +13,9 @@
 	SD_PATH="/data/media/0"
 
 	# block devices
-	SYSTEM_DEVICE="/dev/block/mmcblk0p13"
-	CACHE_DEVICE="/dev/block/mmcblk0p12"
-	DATA_DEVICE="/dev/block/mmcblk0p16"
+	SYSTEM_DEVICE="###SYSTEM###"
+	CACHE_DEVICE="###CACHE###"
+	DATA_DEVICE="###DATA###"
 
 # define file paths
 	BOEFFLA_DATA_PATH="$SD_PATH/boeffla-kernel-data"
@@ -143,6 +143,10 @@
 		echo "80" > /proc/sys/vm/swappiness
 		echo $(date) "No startup configuration found, enable all default settings"  >> $BOEFFLA_LOGFILE
 	fi
+
+# Switch to fq_codel on mobile data and wlan
+	tc qdisc add dev rmnet0 root fq_codel
+	tc qdisc add dev wlan0 root fq_codel
 	
 # Turn off debugging for certain modules
 	echo 0 > /sys/module/ump/parameters/ump_debug_level
@@ -187,6 +191,9 @@
 	if [ -f $DOZE_DISABLER ]; then
 		dumpsys deviceidle disable
 		echo $(date) "Doze disabled" >> $BOEFFLA_LOGFILE
+	else
+		dumpsys deviceidle enable
+		echo $(date) "Doze enabled" >> $BOEFFLA_LOGFILE
 	fi
 
 # disable SELinux if configured
@@ -194,6 +201,7 @@
 		echo "0" > /sys/fs/selinux/enforce
 		echo $(date) "SELinux: permissive" >> $BOEFFLA_LOGFILE
 	else
+		echo "1" > /sys/fs/selinux/enforce
 		echo $(date) "SELinux: enforcing" >> $BOEFFLA_LOGFILE
 	fi
 
